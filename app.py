@@ -135,12 +135,14 @@ with tabs[0]:
         st.bar_chart(formations)
     st.subheader("Completions Over Time")
     st.line_chart(completions)
-
-st.markdown("""
+    
+    st.markdown("""
     **Interpretation**:
     - Shows dominant operators and active formations.
     - Completion trend highlights boom years and industry slowdowns.
     """)
+
+
 
 # === Tab 2 ===
 with tabs[1]:
@@ -155,12 +157,13 @@ with tabs[1]:
     with col2:
         st.subheader("Total Production by County")
         st.bar_chart(total_prod)
-
-st.markdown("""
+        st.markdown("""
     **Interpretation**:
     - High cycle times may reflect operational delays or complex geology.
     - County-level production insights can inform future drilling priorities.
     """)
+
+
 
 # === Tab 3 ===
 with tabs[2]:
@@ -172,18 +175,15 @@ with tabs[2]:
     ax.set_title("Top 20 Wells by 90-Day Post Peak Production")
     ax.set_xticklabels(top_peaks['well_id'], rotation=45)
     st.pyplot(fig)
-
-st.markdown("""
+    st.markdown("""
     **Interpretation**:
     - Identifies wells with the strongest short-term performance after peak.
     - Useful for benchmarking success and optimizing future completions.
     """)
 
-st.markdown("""
-    **Interpretation**:
-    - Tracks operator behavior across time.
-    - Can help forecast future well activity and infrastructure needs.
-    """)
+
+
+
 
 
 # === Tab 4 ===
@@ -192,6 +192,11 @@ with tabs[3]:
     top5 = cleaned_web['Operator'].value_counts().head(5).index.tolist()
     trends = cleaned_web[cleaned_web['Operator'].isin(top5)].groupby(['Completion Year', 'Operator']).size().unstack(fill_value=0)
     st.line_chart(trends)
+    st.markdown("""
+    **Interpretation**:
+    - Tracks operator behavior across time.
+    - Can help forecast future well activity and infrastructure needs.
+    """)
 
 # === Tab 5 ===
 with tabs[4]:
