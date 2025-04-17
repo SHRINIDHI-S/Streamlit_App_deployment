@@ -4,25 +4,41 @@ import matplotlib.pyplot as plt
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
-import io
 
-# Page Configuration
-st.set_page_config(layout="wide", page_title="Bakken Well Intelligence Hub")
-st.title(":oil_drum: Bakken Well Intelligence Hub")
+# -------------------------------- CONFIG -------------------------------- #
+st.set_page_config(page_title="Bakken Well Intelligence Hub", layout="wide")
+st.title("🛢️ Bakken Well Intelligence Hub")
+
+# ---------------------------- WELCOME PAGE ---------------------------- #
+st.markdown("""
+## 👋 Welcome to the Bakken Well Intelligence Hub
+
+This dashboard provides insights into well production and development activities across the Bakken region.
+
+### 🔧 Key Features:
+- Live scraping from [ND DMR](https://www.dmr.nd.gov/oilgas/bakkenwells.asp)
+- CSV-based well performance and cycle time analytics
+- Time series and county-level production breakdowns
+- 90-day post-peak production explorer
+
+---
+
+**Navigate through tabs to explore the dataset, discover trends, and drive data-informed decisions.**
+""")
+
+# ---------------------------- FUNCTIONS ---------------------------- #
 
 @st.cache_data
-
 def fetch_scrape_and_process():
-    base_url = "https://www.dmr.nd.gov/oilgas/bakkenwells.asp"
-    response = requests.get(base_url)
-    soup = BeautifulSoup(response.text, 'html.parser')
+    url = "https://www.dmr.nd.gov/oilgas/bakkenwells.asp"
+    soup = BeautifulSoup(requests.get(url).text, 'html.parser')
     dropdown = soup.find("select", {"name": "menu1"})
-    formations = {option.text.strip(): option['value'] for option in dropdown.find_all("option") if option['value'] != "SF"}
+    formations = {o.text.strip(): o['value'] for o in dropdown.find_all("option") if o['value'] != "SF"}
 
     all_data = []
-    for name, value in formations.items():
-        res = requests.post(base_url, data={"menu1": value})
-        soup = BeautifulSoup(res.text, 'html.parser')
+    for name, val in formations.items():
+        html = requests.post(url, data={"menu1": val}).text
+        soup = BeautifulSoup(html, 'html.parser')
         table = soup.find("table", id="bakken-horizontal")
         if table:
             headers = [th.text.strip() for th in table.find_all("th")]
@@ -30,27 +46,21 @@ def fetch_scrape_and_process():
             df = pd.DataFrame(rows, columns=headers)
             df['Formation'] = name
             all_data.append(df)
+    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
-    df_all = pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
-    return df_all
-
-# Web Scraped Data Analysis
-def clean_and_analyze_scraped_data(raw_df):
-    if raw_df.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-    raw_df['Completion Date'] = pd.to_datetime(raw_df['Completion Date'], errors='coerce')
-    raw_df['Last Prod Rpt Date'] = pd.to_datetime(raw_df['Last Prod Rpt Date'], errors='coerce')
+def clean_and_analyze_scraped_data(df):
+    if df.empty: return None, None, None
+    df['Completion Date'] = pd.to_datetime(df['Completion Date'], errors='coerce')
+    df['Last Prod Rpt Date'] = pd.to_datetime(df['Last Prod Rpt Date'], errors='coerce')
     for col in ['Cum Oil', 'Cum Water', 'Cum Gas']:
-        raw_df[col] = pd.to_numeric(raw_df[col].astype(str).str.replace(',', ''), errors='coerce')
-    raw_df.drop_duplicates(inplace=True)
-    raw_df['Completion Year'] = raw_df['Completion Date'].dt.year
+        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
+    df['Completion Year'] = df['Completion Date'].dt.year
+    return (
+        df['Operator'].value_counts().head(10),
+        df['Formation'].value_counts(),
+        df.groupby('Completion Year')['File No'].count()
+    )
 
-    top_operators = raw_df['Operator'].value_counts().head(10)
-    formation_counts = raw_df['Formation'].value_counts()
-    completions_by_year = raw_df.groupby('Completion Year')['File No'].count()
-    return top_operators, formation_counts, completions_by_year
-
-# Load Preprocessed CSV Data
 def load_csvs():
     header_df = pd.read_csv("well_header.csv", delimiter='|')
     prod_df = pd.read_csv("monthly_production.csv", delimiter='|')
@@ -62,74 +72,108 @@ def load_csvs():
     prod_df['date'] = pd.to_datetime(prod_df[['year', 'month']].assign(day=1))
     merged = pd.merge(prod_df, header_df, on='well_id', how='inner')
 
+    # Peak window analysis
     peak = prod_df.loc[prod_df.groupby('well_id')['production'].idxmax()].copy()
     peak['start_date'] = peak['date']
     peak['end_date'] = peak['start_date'] + pd.DateOffset(months=3)
     prod_with_peak = prod_df.merge(peak[['well_id', 'start_date', 'end_date']], on='well_id', how='left')
-    prod_with_peak['in_window'] = (prod_with_peak['date'] >= prod_with_peak['start_date']) & (prod_with_peak['date'] < prod_with_peak['end_date'])
-
+    prod_with_peak['in_window'] = (
+        (prod_with_peak['date'] >= prod_with_peak['start_date']) &
+        (prod_with_peak['date'] < prod_with_peak['end_date'])
+    )
     post_peak = prod_with_peak[prod_with_peak['in_window']].groupby('well_id')['production'].sum()
     merged = merged.merge(post_peak, on='well_id', how='left')
     merged.rename(columns={'production_y': 'post_peak_90_day'}, inplace=True)
+
     return merged, header_df
 
-# Fetch and process all data
-raw_web_data = fetch_scrape_and_process()
-top_ops, form_counts, completions = clean_and_analyze_scraped_data(raw_web_data)
+# ---------------------------- DATA LOAD ---------------------------- #
+scraped_df = fetch_scrape_and_process()
+top_ops, form_counts, completions = clean_and_analyze_scraped_data(scraped_df)
 merged_df, header_df = load_csvs()
 
-# App Tabs
+# ---------------------------- TABS ---------------------------- #
 tabs = st.tabs([
-    "Web Overview", 
-    "Completion Timeline", 
-    "Cycle & Production", 
-    "Post-Peak Performers", 
-    "County Comparisons"
+    "🌐 Web-Scraped Insights",
+    "📊 Cycle Time & Production",
+    "🔥 90-Day Peak Performers",
+    "🗺️ County Explorer",
+    "📈 Production Over Time",
+    "🧾 Summary & Insights"
 ])
 
+# ---------------------------- TAB 1 ---------------------------- #
 with tabs[0]:
-    st.header("Scraped Insights: Operators & Formations")
+    st.header("🌐 Insights from Web-Scraped ND DMR Data")
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Top 10 Operators")
         st.bar_chart(top_ops)
     with col2:
-        st.subheader("Well Count by Formation")
+        st.subheader("Wells per Formation")
         st.bar_chart(form_counts)
-
-with tabs[1]:
-    st.header("Well Completion Trends")
+    st.subheader("Completions by Year")
     st.line_chart(completions)
 
-with tabs[2]:
-    st.header("Cycle Time & Total Production by County")
-    county_avg = header_df.groupby('county')['cycle_time'].mean().sort_values(ascending=False)
-    county_prod = merged_df.groupby('county')['production'].sum().sort_values(ascending=False)
-
+# ---------------------------- TAB 2 ---------------------------- #
+with tabs[1]:
+    st.header("📊 Cycle Time & Production by County")
+    avg_cycle = header_df.groupby('county')['cycle_time'].mean().sort_values(ascending=False)
+    total_prod = merged_df.groupby('county')['production'].sum().sort_values(ascending=False)
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Average Cycle Time (days)")
-        st.bar_chart(county_avg)
+        st.bar_chart(avg_cycle)
     with col2:
         st.subheader("Total Production")
-        st.bar_chart(county_prod)
+        st.bar_chart(total_prod)
 
-with tabs[3]:
-    st.header("Top 90-Day Post Peak Production Wells")
-    top_peaks = merged_df[['well_id', 'post_peak_90_day']].drop_duplicates().sort_values(by='post_peak_90_day', ascending=False).head(20)
-    st.dataframe(top_peaks)
+# ---------------------------- TAB 3 ---------------------------- #
+with tabs[2]:
+    st.header("🔥 Top Wells by Post-Peak 90-Day Production")
+    top = merged_df[['well_id', 'post_peak_90_day']].drop_duplicates().sort_values(
+        by='post_peak_90_day', ascending=False).head(20)
+    st.dataframe(top)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.bar(top_peaks['well_id'].astype(str), top_peaks['post_peak_90_day'], color='teal')
-    ax.set_xticklabels(top_peaks['well_id'], rotation=45)
-    ax.set_title("Top 20 Wells by 90-Day Post Peak Production")
+    ax.bar(top['well_id'].astype(str), top['post_peak_90_day'], color='teal')
+    ax.set_title("Top 20 Wells – 90-Day Post Peak Output")
+    ax.set_ylabel("Production")
+    ax.set_xticklabels(top['well_id'], rotation=45)
     st.pyplot(fig)
 
-with tabs[4]:
-    st.header("Compare Counties Side-by-Side")
-    selected = st.multiselect("Select counties to compare:", merged_df['county'].unique(), default=merged_df['county'].unique()[:3])
-    if selected:
-        county_data = merged_df[merged_df['county'].isin(selected)].groupby(['county', 'date'])['production'].sum().reset_index()
-        pivot = county_data.pivot(index='date', columns='county', values='production')
-        st.line_chart(pivot)
+# ---------------------------- TAB 4 ---------------------------- #
+with tabs[3]:
+    st.header("🗺️ Monthly Production by County")
+    selected = st.selectbox("Choose County", sorted(merged_df['county'].dropna().unique()))
+    df_county = merged_df[merged_df['county'] == selected]
+    line_data = df_county.groupby('date')['production'].sum()
+    st.line_chart(line_data)
 
-st.success("Dashboard Loaded Successfully!")
+# ---------------------------- TAB 5 ---------------------------- #
+with tabs[4]:
+    st.header("📈 Total Production Over Time")
+    all_prod = merged_df.groupby('date')['production'].sum()
+    st.area_chart(all_prod)
+
+# ---------------------------- TAB 6 ---------------------------- #
+with tabs[5]:
+    st.header("🧾 Summary & Business Insights")
+    st.markdown("""
+### Key Takeaways:
+
+- ✅ **Continental Resources, Whiting Oil & Hess** dominate completions.
+- 🧭 **Middle Bakken** is the most drilled and productive formation.
+- ⚙️ Counties like **County 1, 6, and 9** are leading in output and efficiency.
+- 📈 Post-peak metrics show production is highly concentrated in select wells.
+
+---
+
+### Potential Improvements:
+- Add economic modeling (CapEx/OpEx)
+- Include geospatial maps using Folium
+- Add ML models to forecast cycle time and post-peak productivity
+
+App powered by fully **automated data ingestion, processing, and visualization.**
+""")
+
+st.success("App fully loaded with automation and visualization complete!")
