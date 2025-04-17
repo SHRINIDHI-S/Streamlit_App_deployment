@@ -61,9 +61,15 @@ def clean_and_analyze_scraped_data(df):
         df.groupby('Completion Year')['File No'].count()
     )
 
+import zipfile
+
 def load_csvs():
     header_df = pd.read_csv("well_header.csv", delimiter='|')
-    prod_df = pd.read_csv("monthly_production.csv", delimiter='|')
+
+    with zipfile.ZipFile("monthly_production.csv.zip", 'r') as z:
+        file_name = z.namelist()[0]  # automatically gets the first file in the zip
+        with z.open(file_name) as f:
+            prod_df = pd.read_csv(f, delimiter='|')
 
     header_df['spud_date'] = pd.to_datetime(header_df['spud_date'], errors='coerce')
     header_df['completion_date'] = pd.to_datetime(header_df['completion_date'], errors='coerce')
@@ -72,20 +78,23 @@ def load_csvs():
     prod_df['date'] = pd.to_datetime(prod_df[['year', 'month']].assign(day=1))
     merged = pd.merge(prod_df, header_df, on='well_id', how='inner')
 
-    # Peak window analysis
+    # Peak production logic
     peak = prod_df.loc[prod_df.groupby('well_id')['production'].idxmax()].copy()
     peak['start_date'] = peak['date']
     peak['end_date'] = peak['start_date'] + pd.DateOffset(months=3)
+
     prod_with_peak = prod_df.merge(peak[['well_id', 'start_date', 'end_date']], on='well_id', how='left')
     prod_with_peak['in_window'] = (
         (prod_with_peak['date'] >= prod_with_peak['start_date']) &
         (prod_with_peak['date'] < prod_with_peak['end_date'])
     )
     post_peak = prod_with_peak[prod_with_peak['in_window']].groupby('well_id')['production'].sum()
+
     merged = merged.merge(post_peak, on='well_id', how='left')
     merged.rename(columns={'production_y': 'post_peak_90_day'}, inplace=True)
 
     return merged, header_df
+
 
 # ---------------------------- DATA LOAD ---------------------------- #
 scraped_df = fetch_scrape_and_process()
