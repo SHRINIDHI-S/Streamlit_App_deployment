@@ -5,7 +5,6 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import zipfile
-import os
 
 # Page Configuration
 st.set_page_config(layout="wide", page_title="Bakken Well Intelligence Hub")
@@ -26,17 +25,7 @@ This interactive dashboard is built to automate the collection, analysis, and vi
 Use the navigation tabs to explore the dataset and uncover actionable insights!
 """)
 
-# === Load and Unzip Data ===
-@st.cache_data
-def extract_zip():
-    zip_path = "monthly_production.csv.zip"
-    extract_dir = "extracted_data"
-    os.makedirs(extract_dir, exist_ok=True)
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(extract_dir)
-    return os.path.join(extract_dir, "monthly_production.csv")
-
-# === Fetch Web Data ===
+# === Web Data Scraping ===
 @st.cache_data
 def fetch_scrape_and_process():
     base_url = "https://www.dmr.nd.gov/oilgas/bakkenwells.asp"
@@ -71,40 +60,44 @@ def clean_scraped_data(df):
     df['Completion Year'] = df['Completion Date'].dt.year
     return df
 
-# === Load Merged Data ===
+# === Load CSV from zip and well header ===
 @st.cache_data
-def load_and_process_data():
-    prod_path = extract_zip()
-    header_path = "well_header.csv"
-    
-    prod_df = pd.read_csv(prod_path, delimiter='|')
-    header_df = pd.read_csv(header_path, delimiter='|')
+def load_csvs():
+    # Load monthly production from zip
+    with zipfile.ZipFile("monthly_production.csv.zip", 'r') as zip_ref:
+        with zip_ref.open("monthly_production.csv") as f:
+            prod_df = pd.read_csv(f, delimiter='|')
 
+    header_df = pd.read_csv("well_header.csv", delimiter='|')
+
+    # Date conversion and cycle time calculation
     header_df['spud_date'] = pd.to_datetime(header_df['spud_date'], errors='coerce')
     header_df['completion_date'] = pd.to_datetime(header_df['completion_date'], errors='coerce')
     header_df['cycle_time'] = (header_df['completion_date'] - header_df['spud_date']).dt.days
 
     prod_df['date'] = pd.to_datetime(prod_df[['year', 'month']].assign(day=1))
-    merged = pd.merge(prod_df, header_df, on='well_id', how='inner')
 
+    # Merge and compute 90-day peak production
+    merged = pd.merge(prod_df, header_df, on='well_id', how='inner')
     peak = prod_df.loc[prod_df.groupby('well_id')['production'].idxmax()].copy()
     peak['start_date'] = peak['date']
     peak['end_date'] = peak['start_date'] + pd.DateOffset(months=3)
+
     prod_with_peak = prod_df.merge(peak[['well_id', 'start_date', 'end_date']], on='well_id', how='left')
     prod_with_peak['in_window'] = (prod_with_peak['date'] >= prod_with_peak['start_date']) & (prod_with_peak['date'] < prod_with_peak['end_date'])
 
     post_peak = prod_with_peak[prod_with_peak['in_window']].groupby('well_id')['production'].sum()
     merged = merged.merge(post_peak, on='well_id', how='left')
     merged.rename(columns={'production_y': 'post_peak_90_day'}, inplace=True)
-    
+
     return merged, header_df
 
-# === Fetch Data ===
+# === Fetch All Data ===
 raw_web_data = fetch_scrape_and_process()
 cleaned_web = clean_scraped_data(raw_web_data)
-merged_df, header_df = load_and_process_data()
+merged_df, header_df = load_csvs()
 
-# === Tabs ===
+# === Tabs Layout ===
 tabs = st.tabs([
     "Web Overview",
     "Cycle & Production",
