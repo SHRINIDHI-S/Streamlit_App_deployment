@@ -5,6 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import zipfile
+import os
 
 # Page Configuration
 st.set_page_config(layout="wide", page_title="Bakken Well Intelligence Hub")
@@ -14,24 +15,33 @@ st.title("📊 Bakken Well Intelligence Hub")
 st.markdown("""
 ### Welcome to the Bakken Well Intelligence Hub!
 
-This interactive dashboard is built to automate the collection, analysis, and visualization of oil well data from the Bakken region. Here's what it does:
+This interactive dashboard automates data extraction, cleaning, and analysis for oil wells in the Bakken region.
 
-- 📥 **Scrapes live data** from the [NDIC site](https://www.dmr.nd.gov/oilgas/bakkenwells.asp) for all Bakken formations.
-- 🧹 **Cleans and preprocesses** the raw well data for consistency.
-- 📈 **Analyzes production trends**, cycle times, and operator/formation performance.
-- 🧪 **Extracts** a CSV file from a zip archive (`monthly_production.csv.zip`) and combines it with header data.
-- 🧠 **Visualizes** top-producing wells, completion trends, and 90-day post-peak production patterns.
+#### Key Features:
+- 📥 Live scraping from [NDIC's Bakken site](https://www.dmr.nd.gov/oilgas/bakkenwells.asp)
+- 🧹 Data cleaning & standardization
+- 📦 Zip file extraction and CSV merging
+- 📊 Visuals for well completions, cycle time, and post-peak production
 
-Use the navigation tabs to explore the dataset and uncover actionable insights!
+Use the tabs below to explore insights and trends from the Bakken formation.
 """)
 
-# === Web Data Scraping ===
+# === Load and Unzip Data ===
+@st.cache_data
+def extract_zip():
+    zip_path = "monthly_production.csv.zip"
+    extract_dir = "extracted_data"
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(extract_dir)
+    return os.path.join(extract_dir, "monthly_production.csv")
+
+# === Fetch Web Data ===
 @st.cache_data
 def fetch_scrape_and_process():
     base_url = "https://www.dmr.nd.gov/oilgas/bakkenwells.asp"
     response = requests.get(base_url)
     soup = BeautifulSoup(response.text, 'html.parser')
-
     dropdown = soup.find("select", {"name": "menu1"})
     formations = {option.text.strip(): option['value']
                   for option in dropdown.find_all("option") if option['value'] != "SF"}
@@ -48,8 +58,7 @@ def fetch_scrape_and_process():
             df['Formation'] = name
             all_data.append(df)
 
-    df_all = pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
-    return df_all
+    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
 
 def clean_scraped_data(df):
     df['Completion Date'] = pd.to_datetime(df['Completion Date'], errors='coerce')
@@ -60,24 +69,20 @@ def clean_scraped_data(df):
     df['Completion Year'] = df['Completion Date'].dt.year
     return df
 
-# === Load CSV from zip and well header ===
+# === Load Merged CSV Data ===
 @st.cache_data
-def load_csvs():
-    # Load monthly production from zip
-    with zipfile.ZipFile("monthly_production.csv.zip", 'r') as zip_ref:
-        with zip_ref.open("monthly_production.csv") as f:
-            prod_df = pd.read_csv(f, delimiter='|')
-
+def load_and_process_data():
+    prod_path = extract_zip()
+    prod_df = pd.read_csv(prod_path, delimiter='|')
     header_df = pd.read_csv("well_header.csv", delimiter='|')
 
-    # Date conversion and cycle time calculation
+    # Standardize dates
     header_df['spud_date'] = pd.to_datetime(header_df['spud_date'], errors='coerce')
     header_df['completion_date'] = pd.to_datetime(header_df['completion_date'], errors='coerce')
     header_df['cycle_time'] = (header_df['completion_date'] - header_df['spud_date']).dt.days
-
     prod_df['date'] = pd.to_datetime(prod_df[['year', 'month']].assign(day=1))
 
-    # Merge and compute 90-day peak production
+    # Merge and calculate 90-day peak production
     merged = pd.merge(prod_df, header_df, on='well_id', how='inner')
     peak = prod_df.loc[prod_df.groupby('well_id')['production'].idxmax()].copy()
     peak['start_date'] = peak['date']
@@ -85,19 +90,19 @@ def load_csvs():
 
     prod_with_peak = prod_df.merge(peak[['well_id', 'start_date', 'end_date']], on='well_id', how='left')
     prod_with_peak['in_window'] = (prod_with_peak['date'] >= prod_with_peak['start_date']) & (prod_with_peak['date'] < prod_with_peak['end_date'])
-
     post_peak = prod_with_peak[prod_with_peak['in_window']].groupby('well_id')['production'].sum()
+
     merged = merged.merge(post_peak, on='well_id', how='left')
-    merged.rename(columns={'production_y': 'post_peak_90_day'}, inplace=True)
+    merged.rename(columns={'production_y': 'post_peak_90_day', 'production_x': 'production'}, inplace=True)
 
     return merged, header_df
 
-# === Fetch All Data ===
+# === Run Data Loaders ===
 raw_web_data = fetch_scrape_and_process()
 cleaned_web = clean_scraped_data(raw_web_data)
-merged_df, header_df = load_csvs()
+merged_df, header_df = load_and_process_data()
 
-# === Tabs Layout ===
+# === TABS ===
 tabs = st.tabs([
     "Web Overview",
     "Cycle & Production",
@@ -165,5 +170,5 @@ with tabs[4]:
     - Some wells show exceptional short-term output post-peak – these could inform drilling strategy.
     
     ---
-    ⚙️ _This app is designed to scale. Future features could include forecasting, economic analysis, and spatial visualizations._
+    ⚙️ _This app is scalable. Future enhancements could include forecasting, economic metrics, and GIS-based mapping._
     """)
