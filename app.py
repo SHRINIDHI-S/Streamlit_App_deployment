@@ -15,15 +15,23 @@ st.title("📊 Bakken Well Intelligence Hub")
 st.markdown("""
 ### Welcome to the Bakken Well Intelligence Hub!
 
-This interactive dashboard automates data extraction, cleaning, and analysis for oil wells in the Bakken region.
+This interactive dashboard automates the full analytics pipeline for Bakken well data:
 
-#### Key Features:
-- 📥 Live scraping from [NDIC's Bakken site](https://www.dmr.nd.gov/oilgas/bakkenwells.asp)
-- 🧹 Data cleaning & standardization
-- 📦 Zip file extraction and CSV merging
-- 📊 Visuals for well completions, cycle time, and post-peak production
+🔁 **Automation Logic**:
+- Automatically scrapes live well data from the [NDIC Bakken Wells Page](https://www.dmr.nd.gov/oilgas/bakkenwells.asp).
+- Extracts `monthly_production.csv` from a `.zip` archive and merges it with `well_header.csv`.
+- Calculates custom KPIs such as **cycle time** and **90-day post-peak production**.
+- Applies caching to minimize repeat computations.
 
-Use the tabs below to explore insights and trends from the Bakken formation.
+📦 **Why this matters**:
+This system eliminates the need for manual downloads, cleaning, and aggregation. It gives analysts and decision-makers quick, clean access to Bakken insights.
+
+Use the tabs to:
+1. Explore web-scraped operator and formation data.
+2. Analyze operational cycle times and productivity by county.
+3. Visualize the most productive wells post-peak.
+4. Examine completion trends.
+5. Review summarized insights and potential directions for development.
 """)
 
 # === Load and Unzip Data ===
@@ -42,6 +50,7 @@ def fetch_scrape_and_process():
     base_url = "https://www.dmr.nd.gov/oilgas/bakkenwells.asp"
     response = requests.get(base_url)
     soup = BeautifulSoup(response.text, 'html.parser')
+
     dropdown = soup.find("select", {"name": "menu1"})
     formations = {option.text.strip(): option['value']
                   for option in dropdown.find_all("option") if option['value'] != "SF"}
@@ -58,7 +67,8 @@ def fetch_scrape_and_process():
             df['Formation'] = name
             all_data.append(df)
 
-    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+    df_all = pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+    return df_all
 
 def clean_scraped_data(df):
     df['Completion Date'] = pd.to_datetime(df['Completion Date'], errors='coerce')
@@ -69,20 +79,22 @@ def clean_scraped_data(df):
     df['Completion Year'] = df['Completion Date'].dt.year
     return df
 
-# === Load Merged CSV Data ===
 @st.cache_data
 def load_and_process_data():
-    prod_path = extract_zip()
-    prod_df = pd.read_csv(prod_path, delimiter='|')
+    # Extract monthly production
+    with zipfile.ZipFile("monthly_production.csv.zip", 'r') as zip_ref:
+        with zip_ref.open("monthly_production.csv") as f:
+            prod_df = pd.read_csv(f, delimiter='|')
+
     header_df = pd.read_csv("well_header.csv", delimiter='|')
 
-    # Standardize dates
+    # Date processing
     header_df['spud_date'] = pd.to_datetime(header_df['spud_date'], errors='coerce')
     header_df['completion_date'] = pd.to_datetime(header_df['completion_date'], errors='coerce')
     header_df['cycle_time'] = (header_df['completion_date'] - header_df['spud_date']).dt.days
+
     prod_df['date'] = pd.to_datetime(prod_df[['year', 'month']].assign(day=1))
 
-    # Merge and calculate 90-day peak production
     merged = pd.merge(prod_df, header_df, on='well_id', how='inner')
     peak = prod_df.loc[prod_df.groupby('well_id')['production'].idxmax()].copy()
     peak['start_date'] = peak['date']
@@ -90,19 +102,19 @@ def load_and_process_data():
 
     prod_with_peak = prod_df.merge(peak[['well_id', 'start_date', 'end_date']], on='well_id', how='left')
     prod_with_peak['in_window'] = (prod_with_peak['date'] >= prod_with_peak['start_date']) & (prod_with_peak['date'] < prod_with_peak['end_date'])
-    post_peak = prod_with_peak[prod_with_peak['in_window']].groupby('well_id')['production'].sum()
 
+    post_peak = prod_with_peak[prod_with_peak['in_window']].groupby('well_id')['production'].sum()
     merged = merged.merge(post_peak, on='well_id', how='left')
-    merged.rename(columns={'production_y': 'post_peak_90_day', 'production_x': 'production'}, inplace=True)
+    merged.rename(columns={'production_y': 'post_peak_90_day'}, inplace=True)
 
     return merged, header_df
 
-# === Run Data Loaders ===
+# === Fetch Data ===
 raw_web_data = fetch_scrape_and_process()
 cleaned_web = clean_scraped_data(raw_web_data)
 merged_df, header_df = load_and_process_data()
 
-# === TABS ===
+# === Tabs ===
 tabs = st.tabs([
     "Web Overview",
     "Cycle & Production",
@@ -128,6 +140,12 @@ with tabs[0]:
     st.subheader("Completions Over Time")
     st.line_chart(completions)
 
+    st.markdown("""
+    **Interpretation**:
+    - Shows dominant operators and active formations.
+    - Completion trend highlights boom years and industry slowdowns.
+    """)
+
 # === Tab 2 ===
 with tabs[1]:
     st.header("🔧 Cycle Time and Production")
@@ -142,6 +160,12 @@ with tabs[1]:
         st.subheader("Total Production by County")
         st.bar_chart(total_prod)
 
+    st.markdown("""
+    **Interpretation**:
+    - High cycle times may reflect operational delays or complex geology.
+    - County-level production insights can inform future drilling priorities.
+    """)
+
 # === Tab 3 ===
 with tabs[2]:
     st.header("⏱️ 90-Day Post Peak Production")
@@ -153,6 +177,12 @@ with tabs[2]:
     ax.set_xticklabels(top_peaks['well_id'], rotation=45)
     st.pyplot(fig)
 
+    st.markdown("""
+    **Interpretation**:
+    - Identifies wells with the strongest short-term performance after peak.
+    - Useful for benchmarking success and optimizing future completions.
+    """)
+
 # === Tab 4 ===
 with tabs[3]:
     st.header("📅 Completion Trends by Operator")
@@ -160,15 +190,23 @@ with tabs[3]:
     trends = cleaned_web[cleaned_web['Operator'].isin(top5)].groupby(['Completion Year', 'Operator']).size().unstack(fill_value=0)
     st.line_chart(trends)
 
+    st.markdown("""
+    **Interpretation**:
+    - Tracks operator behavior across time.
+    - Can help forecast future well activity and infrastructure needs.
+    """)
+
 # === Tab 5 ===
 with tabs[4]:
     st.header("🧠 Summary Insights")
     st.markdown("""
     - **County 1** leads in both well count and production volume.
-    - **Middle Bakken** and **Three Forks** are the most active formations.
-    - Top 5 operators show consistent completion patterns year-over-year.
-    - Some wells show exceptional short-term output post-peak – these could inform drilling strategy.
-    
-    ---
-    ⚙️ _This app is scalable. Future enhancements could include forecasting, economic metrics, and GIS-based mapping._
+    - **Middle Bakken** and **Three Forks** dominate formation activity.
+    - Top 5 operators show consistent completion strategies.
+    - Wells with high 90-day post-peak output may guide future drilling templates.
+
+    ⚙️ _Future scope:_
+    - Add predictive models to forecast completions and production.
+    - Enable spatial analytics using mapping libraries.
+    - Include economic models based on oil prices and operating cost structures.
     """)
