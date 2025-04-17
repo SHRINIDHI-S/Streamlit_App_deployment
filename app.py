@@ -15,15 +15,23 @@ st.title("📊 Bakken Well Intelligence Hub")
 st.markdown("""
 ### Welcome to the Bakken Well Intelligence Hub!
 
-This interactive dashboard automates data extraction, cleaning, and analysis for oil wells in the Bakken region.
+This interactive dashboard automates the full analytics pipeline for Bakken well data:
 
-#### Key Features:
-- 📥 Live scraping from [NDIC's Bakken site](https://www.dmr.nd.gov/oilgas/bakkenwells.asp)
-- 🧹 Data cleaning & standardization
-- 📦 Zip file extraction and CSV merging
-- 📊 Visuals for well completions, cycle time, and post-peak production
+🔁 **Automation Logic**:
+- Automatically scrapes live well data from the [NDIC Bakken Wells Page](https://www.dmr.nd.gov/oilgas/bakkenwells.asp).
+- Extracts `monthly_production.csv` from a `.zip` archive and merges it with `well_header.csv`.
+- Calculates custom KPIs such as **cycle time** and **90-day post-peak production**.
+- Applies caching to minimize repeat computations.
 
-Use the tabs below to explore insights and trends from the Bakken formation.
+📦 **Why this matters**:
+This system eliminates the need for manual downloads, cleaning, and aggregation. It gives analysts and decision-makers quick, clean access to Bakken insights.
+
+Use the tabs to:
+1. Explore web-scraped operator and formation data.
+2. Analyze operational cycle times and productivity by county.
+3. Visualize the most productive wells post-peak.
+4. Examine completion trends.
+5. Review summarized insights and potential directions for development.
 """)
 
 # === Load and Unzip Data ===
@@ -128,6 +136,12 @@ with tabs[0]:
     st.subheader("Completions Over Time")
     st.line_chart(completions)
 
+st.markdown("""
+    **Interpretation**:
+    - Shows dominant operators and active formations.
+    - Completion trend highlights boom years and industry slowdowns.
+    """)
+
 # === Tab 2 ===
 with tabs[1]:
     st.header("🔧 Cycle Time and Production")
@@ -142,6 +156,12 @@ with tabs[1]:
         st.subheader("Total Production by County")
         st.bar_chart(total_prod)
 
+st.markdown("""
+    **Interpretation**:
+    - High cycle times may reflect operational delays or complex geology.
+    - County-level production insights can inform future drilling priorities.
+    """)
+
 # === Tab 3 ===
 with tabs[2]:
     st.header("⏱️ 90-Day Post Peak Production")
@@ -152,6 +172,19 @@ with tabs[2]:
     ax.set_title("Top 20 Wells by 90-Day Post Peak Production")
     ax.set_xticklabels(top_peaks['well_id'], rotation=45)
     st.pyplot(fig)
+
+st.markdown("""
+    **Interpretation**:
+    - Identifies wells with the strongest short-term performance after peak.
+    - Useful for benchmarking success and optimizing future completions.
+    """)
+
+st.markdown("""
+    **Interpretation**:
+    - Tracks operator behavior across time.
+    - Can help forecast future well activity and infrastructure needs.
+    """)
+
 
 # === Tab 4 ===
 with tabs[3]:
